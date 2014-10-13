@@ -1,6 +1,6 @@
-/*         ______   ___    ___ 
- *        /\  _  \ /\_ \  /\_ \ 
- *        \ \ \L\ \\//\ \ \//\ \      __     __   _ __   ___ 
+/*         ______   ___    ___
+ *        /\  _  \ /\_ \  /\_ \
+ *        \ \ \L\ \\//\ \ \//\ \      __     __   _ __   ___
  *         \ \  __ \ \ \ \  \ \ \   /'__`\ /'_ `\/\`'__\/ __`\
  *          \ \ \/\ \ \_\ \_ \_\ \_/\  __//\ \L\ \ \ \//\ \L\ \
  *           \ \_\ \_\/\____\/\____\ \____\ \____ \ \_\\ \____/
@@ -17,10 +17,11 @@
  *      See readme.txt for copyright information.
  */
 
-
-#include "allegro.h"
-#include "allegro/internal/aintern.h"
-
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <stdlib.h>
+#include "lzss.h"
 
 /*
    This compression algorithm is based on the ideas of Lempel and Ziv,
@@ -46,6 +47,8 @@
    12-2-404 Green Heights, 580 Nagasawa, Yokosuka 239, Japan.
 
    Modified for use in the Allegro filesystem by Shawn Hargreaves.
+
+   Modified for independent library linking by Michael Dec <grepwood@sucs.org>
 
    Use, distribute, and modify this code freely.
 */
@@ -88,71 +91,53 @@ struct LZSS_UNPACK_DATA             /* for reading LZ files */
 /*** Compression (writing) ***/
 
 /* create_lzss_pack_data:
- *  Creates a PACK_DATA structure.
- */
-LZSS_PACK_DATA *create_lzss_pack_data(void)
-{
-   LZSS_PACK_DATA *dat;
-   int c;
-
-   if ((dat = _AL_MALLOC_ATOMIC(sizeof(LZSS_PACK_DATA))) == NULL) {
-      *allegro_errno = ENOMEM;
-      return NULL;
-   }
-
-   for (c=0; c < N - F; c++)
-      dat->text_buf[c] = 0;
-
-   dat->state = 0;
-
-   return dat;
+ * Creates a PACK_DATA structure. */
+LZSS_PACK_DATA *create_lzss_pack_data(void) {
+	LZSS_PACK_DATA *dat;
+	int c = sizeof(LZSS_PACK_DATA);
+	if ((dat = malloc(c)) == NULL) {
+		fprintf(stderr,"Couldn't malloc %i bytes for LZSS_PACK_DATA\n",c);
+		return NULL;
+	}
+	memset(dat->text_buf,0,N-F);
+	dat->state = 0;
+	return dat;
 }
-
-
 
 /* free_lzss_pack_data:
- *  Frees an LZSS_PACK_DATA structure.
- */
-void free_lzss_pack_data(LZSS_PACK_DATA *dat)
-{
+ *  Frees an LZSS_PACK_DATA structure. */
+void free_lzss_pack_data(LZSS_PACK_DATA *dat) {
    ASSERT(dat);
-
-   _AL_FREE(dat);
+   free(dat);
 }
 
-
-
 /* lzss_inittree:
- *  For i = 0 to N-1, rson[i] and lson[i] will be the right and left 
- *  children of node i. These nodes need not be initialized. Also, dad[i] 
- *  is the parent of node i. These are initialized to N, which stands for 
- *  'not used.' For i = 0 to 255, rson[N+i+1] is the root of the tree for 
- *  strings that begin with character i. These are initialized to N. Note 
+ *  For i = 0 to N-1, rson[i] and lson[i] will be the right and left
+ *  children of node i. These nodes need not be initialized. Also, dad[i]
+ *  is the parent of node i. These are initialized to N, which stands for
+ *  'not used.' For i = 0 to 255, rson[N+i+1] is the root of the tree for
+ *  strings that begin with character i. These are initialized to N. Note
  *  there are 256 trees.
  */
-static void lzss_inittree(LZSS_PACK_DATA *dat)
-{
-   int i;
-
-   for (i=N+1; i<=N+256; i++)
-      dat->rson[i] = N;
-
-   for (i=0; i<N; i++)
-      dat->dad[i] = N;
+static void lzss_inittree(LZSS_PACK_DATA *dat) {
+	int i;
+	for (i=N+1; i<=N+256; i++)
+		dat->rson[i] = N;
+	for (i=0; i<N; i++)
+		dat->dad[i] = N;
 }
 
 
 
 /* lzss_insertnode:
- *  Inserts a string of length F, text_buf[r..r+F-1], into one of the trees 
- *  (text_buf[r]'th tree) and returns the longest-match position and length 
- *  via match_position and match_length. If match_length = F, then removes 
- *  the old node in favor of the new one, because the old one will be 
- *  deleted sooner. Note r plays double role, as tree node and position in 
- *  the buffer. 
+ *  Inserts a string of length F, text_buf[r..r+F-1], into one of the trees
+ *  (text_buf[r]'th tree) and returns the longest-match position and length
+ *  via match_position and match_length. If match_length = F, then removes
+ *  the old node in favor of the new one, because the old one will be
+ *  deleted sooner. Note r plays double role, as tree node and position in
+ *  the buffer.
  */
-static void lzss_insertnode(int r, LZSS_PACK_DATA *dat)
-{
+static void lzss_insertnode(int r, LZSS_PACK_DATA *dat) {
    int i, p, cmp;
    unsigned char *key;
    unsigned char *text_buf = dat->text_buf;
@@ -164,7 +149,6 @@ static void lzss_insertnode(int r, LZSS_PACK_DATA *dat)
    dat->match_length = 0;
 
    for (;;) {
-
       if (cmp >= 0) {
 	 if (dat->rson[p] != N)
 	    p = dat->rson[p];
@@ -210,10 +194,8 @@ static void lzss_insertnode(int r, LZSS_PACK_DATA *dat)
 
 
 /* lzss_deletenode:
- *  Removes a node from a tree.
- */
-static void lzss_deletenode(int p, LZSS_PACK_DATA *dat)
-{
+ *  Removes a node from a tree. */
+static void lzss_deletenode(int p, LZSS_PACK_DATA *dat) {
    int q;
 
    if (dat->dad[p] == N)
@@ -254,8 +236,7 @@ static void lzss_deletenode(int p, LZSS_PACK_DATA *dat)
  *  Packs size bytes from buf, using the pack information contained in dat.
  *  Returns 0 on success.
  */
-int lzss_write(PACKFILE *file, LZSS_PACK_DATA *dat, int size, unsigned char *buf, int last)
-{
+int lzss_write(PACKFILE *file, LZSS_PACK_DATA *dat, int size, unsigned char *buf, int last) {
    int i = dat->i;
    int c = dat->c;
    int len = dat->len;
@@ -293,7 +274,7 @@ int lzss_write(PACKFILE *file, LZSS_PACK_DATA *dat, int size, unsigned char *buf
 	 }
       }
       pos1:
-	 ; 
+	 ;
    }
 
    if (len == 0)
@@ -420,51 +401,36 @@ int lzss_write(PACKFILE *file, LZSS_PACK_DATA *dat, int size, unsigned char *buf
    return ret;
 }
 
-
-
 /*** Decompression (reading) ***/
 
 /* create_unpack_data:
  *  Creates an LZSS_UNPACK_DATA structure.
  */
-LZSS_UNPACK_DATA *create_lzss_unpack_data(void)
-{
-   LZSS_UNPACK_DATA *dat;
-   int c;
+LZSS_UNPACK_DATA *create_lzss_unpack_data(void) {
+	LZSS_UNPACK_DATA *dat;
+	int c = sizeof(LZSS_UNPACK_DATA);
 
-   if ((dat = _AL_MALLOC_ATOMIC(sizeof(LZSS_UNPACK_DATA))) == NULL) {
-      *allegro_errno = ENOMEM;
-      return NULL;
-   }
-
-   for (c=0; c < N - F; c++)
-      dat->text_buf[c] = 0;
-
-   dat->state = 0;
-
-   return dat;
+	if ((dat = malloc(c)) == NULL) {
+		fprintf(stderr,"Couldn't malloc %i bytes for LZSS_PACK_DATA\n",c);
+		return NULL;
+	}
+	memset(dat->text_buf,0,N-F);
+	dat->state = 0;
+	return dat;
 }
-
-
 
 /* free_lzss_unpack_data:
  *  Frees an LZSS_UNPACK_DATA structure.
  */
-void free_lzss_unpack_data(LZSS_UNPACK_DATA *dat)
-{
+void free_lzss_unpack_data(LZSS_UNPACK_DATA *dat) {
    ASSERT(dat);
-
-   _AL_FREE(dat);
+   free(dat);
 }
-
-
 
 /* lzss_read:
  *  Unpacks from dat into buf, until either EOF is reached or s bytes have
- *  been extracted. Returns the number of bytes added to the buffer
- */
-int lzss_read(PACKFILE *file, LZSS_UNPACK_DATA *dat, int s, unsigned char *buf)
-{
+ *  been extracted. Returns the number of bytes added to the buffer */
+int lzss_read(PACKFILE *file, LZSS_UNPACK_DATA *dat, int s, unsigned char *buf) {
    int i = dat->i;
    int j = dat->j;
    int k = dat->k;
@@ -486,7 +452,7 @@ int lzss_read(PACKFILE *file, LZSS_UNPACK_DATA *dat, int s, unsigned char *buf)
       if (((flags >>= 1) & 256) == 0) {
 	 if ((c = pack_getc(file)) == EOF)
 	    break;
-  
+
 	 if ((file->is_normal_packfile) && (file->normal.passpos) &&
 	     (file->normal.flags & PACKFILE_FLAG_OLD_CRYPT))
 	 {
@@ -510,7 +476,7 @@ int lzss_read(PACKFILE *file, LZSS_UNPACK_DATA *dat, int s, unsigned char *buf)
 	    goto getout;
 	 }
 	 pos1:
-	    ; 
+	    ;
       }
       else {
 	 if ((i = pack_getc(file)) == EOF)
@@ -529,7 +495,7 @@ int lzss_read(PACKFILE *file, LZSS_UNPACK_DATA *dat, int s, unsigned char *buf)
 	       goto getout;
 	    }
 	    pos2:
-	       ; 
+	       ;
 	 }
       }
    }
@@ -548,14 +514,10 @@ int lzss_read(PACKFILE *file, LZSS_UNPACK_DATA *dat, int s, unsigned char *buf)
    return size;
 }
 
-
-
 /* _al_lzss_incomplete_state:
  *  Return non-zero if the previous lzss_read() call was in the middle of
  *  unpacking a sequence of bytes into the supplied buffer, but had to suspend
- *  because the buffer wasn't big enough.
- */
-int _al_lzss_incomplete_state(AL_CONST LZSS_UNPACK_DATA *dat)
-{
-   return dat->state == 2;
+ *  because the buffer wasn't big enough. */
+int _al_lzss_incomplete_state(const LZSS_UNPACK_DATA *dat) {
+	return dat->state == 2;
 }
