@@ -1,523 +1,174 @@
-/*         ______   ___    ___
- *        /\  _  \ /\_ \  /\_ \
- *        \ \ \L\ \\//\ \ \//\ \      __     __   _ __   ___
- *         \ \  __ \ \ \ \  \ \ \   /'__`\ /'_ `\/\`'__\/ __`\
- *          \ \ \/\ \ \_\ \_ \_\ \_/\  __//\ \L\ \ \ \//\ \L\ \
- *           \ \_\ \_\/\____\/\____\ \____\ \____ \ \_\\ \____/
- *            \/_/\/_/\/____/\/____/\/____/\/___L\ \/_/ \/___/
- *                                           /\____/
- *                                           \_/__/
- *
- *      LZSS compression routines.
- *
- *      By Shawn Hargreaves.
- *
- *      Original code by Haruhiko Okumura.
- *
- *      See readme.txt for copyright information.
- */
+/* LZSS encoder-decoder  (c) Haruhiko Okumura */
 
 #include <stdio.h>
-#include <stdint.h>
-#include <string.h>
 #include <stdlib.h>
-#include "lzss.h"
 
-/*
-   This compression algorithm is based on the ideas of Lempel and Ziv,
-   with the modifications suggested by Storer and Szymanski. The algorithm 
-   is based on the use of a ring buffer, which initially contains zeros. 
-   We read several characters from the file into the buffer, and then 
-   search the buffer for the longest string that matches the characters 
-   just read, and output the length and position of the match in the buffer.
+#define EI 11  /* typically 10..13 */
+#define EJ  4  /* typically 4..5 */
+#define P   1  /* If match length <= P then output one character */
+#define N (1 << EI)  /* buffer size */
+#define F ((1 << EJ) + P)  /* lookahead buffer size */
 
-   With a buffer size of 4096 bytes, the position can be encoded in 12
-   bits. If we represent the match length in four bits, the <position,
-   length> pair is two bytes long. If the longest match is no more than
-   two characters, then we send just one character without encoding, and
-   restart the process with the next letter. We must send one extra bit
-   each time to tell the decoder whether we are sending a <position,
-   length> pair or an unencoded character, and these flags are stored as
-   an eight bit mask every eight items.
+int bit_buffer = 0, bit_mask = 128;
+unsigned long codecount = 0, textcount = 0;
+unsigned char buffer[N * 2];
+FILE *infile, *outfile;
 
-   This implementation uses binary trees to speed up the search for the
-   longest match.
-
-   Original code by Haruhiko Okumura, 4/6/1989.
-   12-2-404 Green Heights, 580 Nagasawa, Yokosuka 239, Japan.
-
-   Modified for use in the Allegro filesystem by Shawn Hargreaves.
-
-   Modified for independent library linking by Michael Dec <grepwood@sucs.org>
-
-   Use, distribute, and modify this code freely.
-*/
-
-
-#define N            4096           /* 4k buffers for LZ compression */
-#define F            18             /* upper limit for LZ match length */
-#define THRESHOLD    2              /* LZ encode string into pos and length
-				       if match size is greater than this */
-
-
-struct LZSS_PACK_DATA               /* stuff for doing LZ compression */
+void error(void)
 {
-   int state;                       /* where have we got to in the pack? */
-   int i, c, len, r, s;
-   int last_match_length, code_buf_ptr;
-   unsigned char mask;
-   char code_buf[17];
-   int match_position;
-   int match_length;
-   int lson[N+1];                   /* left children, */
-   int rson[N+257];                 /* right children, */
-   int dad[N+1];                    /* and parents, = binary search trees */
-   unsigned char text_buf[N+F-1];   /* ring buffer, with F-1 extra bytes
-				       for string comparison */
-};
+    printf("Output error\n");  exit(1);
+}
 
-
-struct LZSS_UNPACK_DATA             /* for reading LZ files */
+void putbit1(void)
 {
-   int state;                       /* where have we got to? */
-   int i, j, k, r, c;
-   int flags;
-   unsigned char text_buf[N+F-1];   /* ring buffer, with F-1 extra bytes
-				       for string comparison */
-};
-
-
-
-/*** Compression (writing) ***/
-
-/* create_lzss_pack_data:
- * Creates a PACK_DATA structure. */
-LZSS_PACK_DATA *create_lzss_pack_data(void) {
-	LZSS_PACK_DATA *dat;
-	int c = sizeof(LZSS_PACK_DATA);
-	if ((dat = malloc(c)) == NULL) {
-		fprintf(stderr,"Couldn't malloc %i bytes for LZSS_PACK_DATA\n",c);
-		return NULL;
-	}
-	memset(dat->text_buf,0,N-F);
-	dat->state = 0;
-	return dat;
+    bit_buffer |= bit_mask;
+    if ((bit_mask >>= 1) == 0) {
+        if (fputc(bit_buffer, outfile) == EOF) error();
+        bit_buffer = 0;  bit_mask = 128;  codecount++;
+    }
 }
 
-/* free_lzss_pack_data:
- *  Frees an LZSS_PACK_DATA structure. */
-void free_lzss_pack_data(LZSS_PACK_DATA *dat) {
-   ASSERT(dat);
-   free(dat);
+void putbit0(void) {
+    if ((bit_mask >>= 1) == 0) {
+        if (fputc(bit_buffer, outfile) == EOF) error();
+        bit_buffer = 0;  bit_mask = 128;  codecount++;
+    }
 }
 
-/* lzss_inittree:
- *  For i = 0 to N-1, rson[i] and lson[i] will be the right and left
- *  children of node i. These nodes need not be initialized. Also, dad[i]
- *  is the parent of node i. These are initialized to N, which stands for
- *  'not used.' For i = 0 to 255, rson[N+i+1] is the root of the tree for
- *  strings that begin with character i. These are initialized to N. Note
- *  there are 256 trees.
- */
-static void lzss_inittree(LZSS_PACK_DATA *dat) {
-	int i;
-	for (i=N+1; i<=N+256; i++)
-		dat->rson[i] = N;
-	for (i=0; i<N; i++)
-		dat->dad[i] = N;
+void flush_bit_buffer(void) {
+    if (bit_mask != 128) {
+        if (fputc(bit_buffer, outfile) == EOF) error();
+        codecount++;
+    }
 }
 
+void output1(int c) {
+    int mask;
 
-
-/* lzss_insertnode:
- *  Inserts a string of length F, text_buf[r..r+F-1], into one of the trees
- *  (text_buf[r]'th tree) and returns the longest-match position and length
- *  via match_position and match_length. If match_length = F, then removes
- *  the old node in favor of the new one, because the old one will be
- *  deleted sooner. Note r plays double role, as tree node and position in
- *  the buffer.
- */
-static void lzss_insertnode(int r, LZSS_PACK_DATA *dat) {
-   int i, p, cmp;
-   unsigned char *key;
-   unsigned char *text_buf = dat->text_buf;
-
-   cmp = 1;
-   key = &text_buf[r];
-   p = N + 1 + key[0];
-   dat->rson[r] = dat->lson[r] = N;
-   dat->match_length = 0;
-
-   for (;;) {
-      if (cmp >= 0) {
-	 if (dat->rson[p] != N)
-	    p = dat->rson[p];
-	 else {
-	    dat->rson[p] = r;
-	    dat->dad[r] = p;
-	    return;
-	 }
-      }
-      else {
-	 if (dat->lson[p] != N)
-	    p = dat->lson[p];
-	 else {
-	    dat->lson[p] = r;
-	    dat->dad[r] = p;
-	    return;
-	 }
-      }
-
-      for (i = 1; i < F; i++)
-	 if ((cmp = key[i] - text_buf[p + i]) != 0)
-	    break;
-
-      if (i > dat->match_length) {
-	 dat->match_position = p;
-	 if ((dat->match_length = i) >= F)
-	    break;
-      }
-   }
-
-   dat->dad[r] = dat->dad[p];
-   dat->lson[r] = dat->lson[p];
-   dat->rson[r] = dat->rson[p];
-   dat->dad[dat->lson[p]] = r;
-   dat->dad[dat->rson[p]] = r;
-   if (dat->rson[dat->dad[p]] == p)
-      dat->rson[dat->dad[p]] = r;
-   else
-      dat->lson[dat->dad[p]] = r;
-   dat->dad[p] = N;                 /* remove p */
+    putbit1();
+    mask = 256;
+    while (mask >>= 1) {
+        if (c & mask) putbit1();
+        else putbit0();
+    }
 }
 
+void output2(int x, int y) {
+    int mask;
 
-
-/* lzss_deletenode:
- *  Removes a node from a tree. */
-static void lzss_deletenode(int p, LZSS_PACK_DATA *dat) {
-   int q;
-
-   if (dat->dad[p] == N)
-      return;     /* not in tree */
-
-   if (dat->rson[p] == N)
-      q = dat->lson[p];
-   else
-      if (dat->lson[p] == N)
-	 q = dat->rson[p];
-      else {
-	 q = dat->lson[p];
-	 if (dat->rson[q] != N) {
-	    do {
-	       q = dat->rson[q];
-	    } while (dat->rson[q] != N);
-	    dat->rson[dat->dad[q]] = dat->lson[q];
-	    dat->dad[dat->lson[q]] = dat->dad[q];
-	    dat->lson[q] = dat->lson[p];
-	    dat->dad[dat->lson[p]] = q;
-	 }
-	 dat->rson[q] = dat->rson[p];
-	 dat->dad[dat->rson[p]] = q;
-      }
-
-   dat->dad[q] = dat->dad[p];
-   if (dat->rson[dat->dad[p]] == p)
-      dat->rson[dat->dad[p]] = q;
-   else
-      dat->lson[dat->dad[p]] = q;
-
-   dat->dad[p] = N;
+    putbit0();
+    mask = N;
+    while (mask >>= 1) {
+        if (x & mask) putbit1();
+        else putbit0();
+    }
+    mask = (1 << EJ);
+    while (mask >>= 1) {
+        if (y & mask) putbit1();
+        else putbit0();
+    }
 }
 
+void encode(void) {
+    int i, j, f1, x, y, r, s, bufferend, c;
 
-
-/* lzss_write:
- *  Packs size bytes from buf, using the pack information contained in dat.
- *  Returns 0 on success.
- */
-int lzss_write(PACKFILE *file, LZSS_PACK_DATA *dat, int size, unsigned char *buf, int last) {
-   int i = dat->i;
-   int c = dat->c;
-   int len = dat->len;
-   int r = dat->r;
-   int s = dat->s;
-   int last_match_length = dat->last_match_length;
-   int code_buf_ptr = dat->code_buf_ptr;
-   unsigned char mask = dat->mask;
-   int ret = 0;
-
-   if (dat->state==2)
-      goto pos2;
-   else
-      if (dat->state==1)
-	 goto pos1;
-
-   dat->code_buf[0] = 0;
-      /* code_buf[1..16] saves eight units of code, and code_buf[0] works
-	 as eight flags, "1" representing that the unit is an unencoded
-	 letter (1 byte), "0" a position-and-length pair (2 bytes).
-	 Thus, eight units require at most 16 bytes of code. */
-
-   code_buf_ptr = mask = 1;
-
-   s = 0;
-   r = N - F;
-   lzss_inittree(dat);
-
-   for (len=0; (len < F) && (size > 0); len++) {
-      dat->text_buf[r+len] = *(buf++);
-      if (--size == 0) {
-	 if (!last) {
-	    dat->state = 1;
-	    goto getout;
-	 }
-      }
-      pos1:
-	 ;
-   }
-
-   if (len == 0)
-      goto getout;
-
-   for (i=1; i <= F; i++)
-      lzss_insertnode(r-i,dat);
-	    /* Insert the F strings, each of which begins with one or
-	       more 'space' characters. Note the order in which these
-	       strings are inserted. This way, degenerate trees will be
-	       less likely to occur. */
-
-   lzss_insertnode(r,dat);
-	    /* Finally, insert the whole string just read. match_length
-	       and match_position are set. */
-
-   do {
-      if (dat->match_length > len)
-	 dat->match_length = len;  /* match_length may be long near the end */
-
-      if (dat->match_length <= THRESHOLD) {
-	 dat->match_length = 1;  /* not long enough match: send one byte */
-	 dat->code_buf[0] |= mask;    /* 'send one byte' flag */
-	 dat->code_buf[code_buf_ptr++] = dat->text_buf[r]; /* send uncoded */
-      }
-      else {
-	 /* send position and length pair. Note match_length > THRESHOLD */
-	 dat->code_buf[code_buf_ptr++] = (unsigned char) dat->match_position;
-	 dat->code_buf[code_buf_ptr++] = (unsigned char)
-				     (((dat->match_position >> 4) & 0xF0) |
-				      (dat->match_length - (THRESHOLD + 1)));
-      }
-
-      if ((mask <<= 1) == 0) {                  /* shift mask left one bit */
-
-	 if ((file->is_normal_packfile) && (file->normal.passpos) &&
-	     (file->normal.flags & PACKFILE_FLAG_OLD_CRYPT))
-	 {
-	    dat->code_buf[0] ^= *file->normal.passpos;
-	    file->normal.passpos++;
-	    if (!*file->normal.passpos)
-	       file->normal.passpos = file->normal.passdata;
-	 }
-
-	 for (i=0; i<code_buf_ptr; i++)         /* send at most 8 units of */
-	    pack_putc(dat->code_buf[i], file);  /* code together */
-
-	 if (pack_ferror(file)) {
-	    ret = EOF;
-	    goto getout;
-	 }
-	 dat->code_buf[0] = 0;
-	 code_buf_ptr = mask = 1;
-      }
-
-      last_match_length = dat->match_length;
-
-      for (i=0; (i < last_match_length) && (size > 0); i++) {
-	 c = *(buf++);
-	 if (--size == 0) {
-	    if (!last) {
-	       dat->state = 2;
-	       goto getout;
-	    }
-	 }
-	 pos2:
-	 lzss_deletenode(s,dat);    /* delete old strings and */
-	 dat->text_buf[s] = c;      /* read new bytes */
-	 if (s < F-1)
-	    dat->text_buf[s+N] = c; /* if the position is near the end of
-				       buffer, extend the buffer to make
-				       string comparison easier */
-	 s = (s+1) & (N-1);
-	 r = (r+1) & (N-1);         /* since this is a ring buffer,
-				       increment the position modulo N */
-
-	 lzss_insertnode(r,dat);    /* register the string in
-				       text_buf[r..r+F-1] */
-      }
-
-      while (i++ < last_match_length) {   /* after the end of text, */
-	 lzss_deletenode(s,dat);          /* no need to read, but */
-	 s = (s+1) & (N-1);               /* buffer may not be empty */
-	 r = (r+1) & (N-1);
-	 if (--len)
-	    lzss_insertnode(r,dat); 
-      }
-
-   } while (len > 0);   /* until length of string to be processed is zero */
-
-   if (code_buf_ptr > 1) {         /* send remaining code */
-
-      if ((file->is_normal_packfile) && (file->normal.passpos) &&
-	  (file->normal.flags & PACKFILE_FLAG_OLD_CRYPT))
-      {
-	 dat->code_buf[0] ^= *file->normal.passpos;
-	 file->normal.passpos++;
-	 if (!*file->normal.passpos)
-	    file->normal.passpos = file->normal.passdata;
-      }
-
-      for (i=0; i<code_buf_ptr; i++) {
-	 pack_putc(dat->code_buf[i], file);
-	 if (pack_ferror(file)) {
-	    ret = EOF;
-	    goto getout;
-	 }
-      }
-   }
-
-   dat->state = 0;
-
-   getout:
-
-   dat->i = i;
-   dat->c = c;
-   dat->len = len;
-   dat->r = r;
-   dat->s = s;
-   dat->last_match_length = last_match_length;
-   dat->code_buf_ptr = code_buf_ptr;
-   dat->mask = mask;
-
-   return ret;
+    for (i = 0; i < N - F; i++) buffer[i] = ' ';
+    for (i = N - F; i < N * 2; i++) {
+        if ((c = fgetc(infile)) == EOF) break;
+        buffer[i] = c;  textcount++;
+    }
+    bufferend = i;  r = N - F;  s = 0;
+    while (r < bufferend) {
+        f1 = (F <= bufferend - r) ? F : bufferend - r;
+        x = 0;  y = 1;  c = buffer[r];
+        for (i = r - 1; i >= s; i--)
+            if (buffer[i] == c) {
+                for (j = 1; j < f1; j++)
+                    if (buffer[i + j] != buffer[r + j]) break;
+                if (j > y) {
+                    x = i;  y = j;
+                }
+            }
+        if (y <= P) output1(c);
+        else output2(x & (N - 1), y - 2);
+        r += y;  s += y;
+        if (r >= N * 2 - F) {
+            for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
+            bufferend -= N;  r -= N;  s -= N;
+            while (bufferend < N * 2) {
+                if ((c = fgetc(infile)) == EOF) break;
+                buffer[bufferend++] = c;  textcount++;
+            }
+        }
+    }
+    flush_bit_buffer();
+    printf("text:  %ld bytes\n", textcount);
+    printf("code:  %ld bytes (%ld%%)\n",
+        codecount, (codecount * 100) / textcount);
 }
 
-/*** Decompression (reading) ***/
+int getbit(int n) /* get n bits */
+{
+    int i, x;
+    static int buf, mask = 0;
 
-/* create_unpack_data:
- *  Creates an LZSS_UNPACK_DATA structure.
- */
-LZSS_UNPACK_DATA *create_lzss_unpack_data(void) {
-	LZSS_UNPACK_DATA *dat;
-	int c = sizeof(LZSS_UNPACK_DATA);
-
-	if ((dat = malloc(c)) == NULL) {
-		fprintf(stderr,"Couldn't malloc %i bytes for LZSS_PACK_DATA\n",c);
-		return NULL;
-	}
-	memset(dat->text_buf,0,N-F);
-	dat->state = 0;
-	return dat;
+    x = 0;
+    for (i = 0; i < n; i++) {
+        if (mask == 0) {
+            if ((buf = fgetc(infile)) == EOF) return EOF;
+            mask = 128;
+        }
+        x <<= 1;
+        if (buf & mask) x++;
+        mask >>= 1;
+    }
+    return x;
 }
 
-/* free_lzss_unpack_data:
- *  Frees an LZSS_UNPACK_DATA structure.
- */
-void free_lzss_unpack_data(LZSS_UNPACK_DATA *dat) {
-   ASSERT(dat);
-   free(dat);
+void decode(void) {
+    int i, j, k, r, c;
+
+    for (i = 0; i < N - F; i++) buffer[i] = ' ';
+    r = N - F;
+    while ((c = getbit(1)) != EOF) {
+        if (c) {
+            if ((c = getbit(8)) == EOF) break;
+            fputc(c, outfile);
+            buffer[r++] = c;  r &= (N - 1);
+        } else {
+            if ((i = getbit(EI)) == EOF) break;
+            if ((j = getbit(EJ)) == EOF) break;
+            for (k = 0; k <= j + 1; k++) {
+                c = buffer[(i + k) & (N - 1)];
+                fputc(c, outfile);
+                buffer[r++] = c;  r &= (N - 1);
+            }
+        }
+    }
 }
 
-/* lzss_read:
- *  Unpacks from dat into buf, until either EOF is reached or s bytes have
- *  been extracted. Returns the number of bytes added to the buffer */
-int lzss_read(PACKFILE *file, LZSS_UNPACK_DATA *dat, int s, unsigned char *buf) {
-   int i = dat->i;
-   int j = dat->j;
-   int k = dat->k;
-   int r = dat->r;
-   int c = dat->c;
-   unsigned int flags = dat->flags;
-   int size = 0;
+int main(int argc, char *argv[]) {
+    int enc;
+    char *s;
 
-   if (dat->state==2)
-      goto pos2;
-   else
-      if (dat->state==1)
-	 goto pos1;
-
-   r = N-F;
-   flags = 0;
-
-   for (;;) {
-      if (((flags >>= 1) & 256) == 0) {
-	 if ((c = pack_getc(file)) == EOF)
-	    break;
-
-	 if ((file->is_normal_packfile) && (file->normal.passpos) &&
-	     (file->normal.flags & PACKFILE_FLAG_OLD_CRYPT))
-	 {
-	    c ^= *file->normal.passpos;
-	    file->normal.passpos++;
-	    if (!*file->normal.passpos)
-	       file->normal.passpos = file->normal.passdata;
-	 }
-
-	 flags = c | 0xFF00;        /* uses higher byte to count eight */
-      }
-
-      if (flags & 1) {
-	 if ((c = pack_getc(file)) == EOF)
-	    break;
-	 dat->text_buf[r++] = c;
-	 r &= (N - 1);
-	 *(buf++) = c;
-	 if (++size >= s) {
-	    dat->state = 1;
-	    goto getout;
-	 }
-	 pos1:
-	    ;
-      }
-      else {
-	 if ((i = pack_getc(file)) == EOF)
-	    break;
-	 if ((j = pack_getc(file)) == EOF)
-	    break;
-	 i |= ((j & 0xF0) << 4);
-	 j = (j & 0x0F) + THRESHOLD;
-	 for (k=0; k <= j; k++) {
-	    c = dat->text_buf[(i + k) & (N - 1)];
-	    dat->text_buf[r++] = c;
-	    r &= (N - 1);
-	    *(buf++) = c;
-	    if (++size >= s) {
-	       dat->state = 2;
-	       goto getout;
-	    }
-	    pos2:
-	       ;
-	 }
-      }
-   }
-
-   dat->state = 0;
-
-   getout:
-
-   dat->i = i;
-   dat->j = j;
-   dat->k = k;
-   dat->r = r;
-   dat->c = c;
-   dat->flags = flags;
-
-   return size;
-}
-
-/* _al_lzss_incomplete_state:
- *  Return non-zero if the previous lzss_read() call was in the middle of
- *  unpacking a sequence of bytes into the supplied buffer, but had to suspend
- *  because the buffer wasn't big enough. */
-int _al_lzss_incomplete_state(const LZSS_UNPACK_DATA *dat) {
-	return dat->state == 2;
+    if (argc != 4) {
+        printf("Usage: lzss e/d infile outfile\n\te = encode\td = decode\n");
+        return 1;
+    }
+    s = argv[1];
+    if (s[1] == 0 && (*s == 'd' || *s == 'D' || *s == 'e' || *s == 'E'))
+        enc = (*s == 'e' || *s == 'E');
+    else {
+	printf("? %s\n", s);
+	return 1;
+    }
+    if ((infile  = fopen(argv[2], "rb")) == NULL) {
+        printf("? %s\n", argv[2]);  return 1;
+    }
+    if ((outfile = fopen(argv[3], "wb")) == NULL) {
+        printf("? %s\n", argv[3]);  return 1;
+    }
+    if (enc) encode();  else decode();
+    fclose(infile);  fclose(outfile);
+    return 0;
 }
