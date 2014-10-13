@@ -14,62 +14,60 @@ unsigned long codecount = 0, textcount = 0;
 unsigned char buffer[N * 2];
 FILE *infile, *outfile;
 
-void error(void)
-{
+static void error(void) {
     printf("Output error\n");  exit(1);
 }
 
-void putbit1(void)
-{
-    bit_buffer |= bit_mask;
-    if ((bit_mask >>= 1) == 0) {
-        if (fputc(bit_buffer, outfile) == EOF) error();
-        bit_buffer = 0;  bit_mask = 128;  codecount++;
-    }
+static void putbit1(FILE * outfile) {
+	bit_buffer |= bit_mask;
+	if ((bit_mask >>= 1) == 0) {
+		if (fputc(bit_buffer, outfile) == EOF) error();
+		bit_buffer = 0;  bit_mask = 128;  codecount++;
+	}
 }
 
-void putbit0(void) {
-    if ((bit_mask >>= 1) == 0) {
-        if (fputc(bit_buffer, outfile) == EOF) error();
-        bit_buffer = 0;  bit_mask = 128;  codecount++;
-    }
+static void putbit0(FILE * outfile) {
+	if ((bit_mask >>= 1) == 0) {
+		if (fputc(bit_buffer, outfile) == EOF) error();
+		bit_buffer = 0;  bit_mask = 128;  codecount++;
+	}
 }
 
-void flush_bit_buffer(void) {
-    if (bit_mask != 128) {
-        if (fputc(bit_buffer, outfile) == EOF) error();
-        codecount++;
-    }
+static void flush_bit_buffer(FILE * outfile) {
+	if (bit_mask != 128) {
+		if (fputc(bit_buffer, outfile) == EOF) error();
+		codecount++;
+	}
 }
 
-void output1(int c) {
-    int mask;
+static void output1(int c, FILE * outfile) {
+	int mask;
 
-    putbit1();
-    mask = 256;
-    while (mask >>= 1) {
-        if (c & mask) putbit1();
-        else putbit0();
-    }
+	putbit1(outfile);
+	mask = 256;
+	while (mask >>= 1) {
+		if (c & mask) putbit1(outfile);
+		else putbit0(outfile);
+	}
 }
 
-void output2(int x, int y) {
-    int mask;
+static void output2(int x, int y, FILE * outfile) {
+	int mask;
 
-    putbit0();
-    mask = N;
-    while (mask >>= 1) {
-        if (x & mask) putbit1();
-        else putbit0();
-    }
-    mask = (1 << EJ);
-    while (mask >>= 1) {
-        if (y & mask) putbit1();
-        else putbit0();
-    }
+	putbit0(outfile);
+	mask = N;
+	while (mask >>= 1) {
+		if (x & mask) putbit1(outfile);
+		else putbit0(outfile);
+	}
+	mask = (1 << EJ);
+	while (mask >>= 1) {
+		if (y & mask) putbit1(outfile);
+		else putbit0(outfile);
+	}
 }
 
-void encode(void) {
+void lzss_encode(FILE * infile, FILE * outfile) {
     int i, j, f1, x, y, r, s, bufferend, c;
 
     for (i = 0; i < N - F; i++) buffer[i] = ' ';
@@ -89,8 +87,8 @@ void encode(void) {
                     x = i;  y = j;
                 }
             }
-        if (y <= P) output1(c);
-        else output2(x & (N - 1), y - 2);
+        if (y <= P) output1(c,outfile);
+        else output2(x & (N - 1), y - 2,outfile);
         r += y;  s += y;
         if (r >= N * 2 - F) {
             for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
@@ -101,13 +99,13 @@ void encode(void) {
             }
         }
     }
-    flush_bit_buffer();
+    flush_bit_buffer(outfile);
     printf("text:  %ld bytes\n", textcount);
     printf("code:  %ld bytes (%ld%%)\n",
         codecount, (codecount * 100) / textcount);
 }
 
-int getbit(int n) /* get n bits */
+static int getbit(int n, FILE * infile) /* get n bits */
 {
     int i, x;
     static int buf, mask = 0;
@@ -125,50 +123,50 @@ int getbit(int n) /* get n bits */
     return x;
 }
 
-void decode(void) {
-    int i, j, k, r, c;
+void lzss_decode(FILE * infile, FILE * outfile) {
+	int i, j, k, r, c;
 
-    for (i = 0; i < N - F; i++) buffer[i] = ' ';
-    r = N - F;
-    while ((c = getbit(1)) != EOF) {
-        if (c) {
-            if ((c = getbit(8)) == EOF) break;
-            fputc(c, outfile);
-            buffer[r++] = c;  r &= (N - 1);
-        } else {
-            if ((i = getbit(EI)) == EOF) break;
-            if ((j = getbit(EJ)) == EOF) break;
-            for (k = 0; k <= j + 1; k++) {
-                c = buffer[(i + k) & (N - 1)];
-                fputc(c, outfile);
-                buffer[r++] = c;  r &= (N - 1);
-            }
-        }
-    }
+	for (i = 0; i < N - F; i++) buffer[i] = ' ';
+	r = N - F;
+	while ((c = getbit(1,infile)) != EOF) {
+		if (c) {
+			if ((c = getbit(8,infile)) == EOF) break;
+			fputc(c, outfile);
+			buffer[r++] = c;  r &= (N - 1);
+		} else {
+			if ((i = getbit(EI,infile)) == EOF) break;
+			if ((j = getbit(EJ,infile)) == EOF) break;
+			for (k = 0; k <= j + 1; k++) {
+				c = buffer[(i + k) & (N - 1)];
+				fputc(c, outfile);
+				buffer[r++] = c;  r &= (N - 1);
+			}
+		}
+	}
 }
 
 int main(int argc, char *argv[]) {
-    int enc;
-    char *s;
+	int enc;
+	char *s;
 
-    if (argc != 4) {
-        printf("Usage: lzss e/d infile outfile\n\te = encode\td = decode\n");
-        return 1;
-    }
-    s = argv[1];
-    if (s[1] == 0 && (*s == 'd' || *s == 'D' || *s == 'e' || *s == 'E'))
-        enc = (*s == 'e' || *s == 'E');
-    else {
-	printf("? %s\n", s);
+	if (argc != 4) {
+		printf("Usage: lzss e/d infile outfile\n\te = encode\td = decode\n");
+		return 1;
+	}
+	s = argv[1];
+	if (s[1] == 0 && (*s == 'd' || *s == 'D' || *s == 'e' || *s == 'E'))
+		enc = (*s == 'e' || *s == 'E');
+	else {
+		printf("? %s\n", s);
 	return 1;
-    }
-    if ((infile  = fopen(argv[2], "rb")) == NULL) {
-        printf("? %s\n", argv[2]);  return 1;
-    }
-    if ((outfile = fopen(argv[3], "wb")) == NULL) {
-        printf("? %s\n", argv[3]);  return 1;
-    }
-    if (enc) encode();  else decode();
-    fclose(infile);  fclose(outfile);
-    return 0;
+	}
+	if ((infile  = fopen(argv[2], "rb")) == NULL) {
+		printf("? %s\n", argv[2]);  return 1;
+	}
+	if ((outfile = fopen(argv[3], "wb")) == NULL) {
+		printf("? %s\n", argv[3]);  return 1;
+	}
+	if (enc) lzss_encode(infile,outfile);  else lzss_decode(infile,outfile);
+	fclose(infile);  fclose(outfile);
+	return 0;
 }
