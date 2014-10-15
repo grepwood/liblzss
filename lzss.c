@@ -9,10 +9,15 @@
 #define N (1 << EI)  /* buffer size */
 #define F ((1 << EJ) + P)  /* lookahead buffer size */
 
+#define LZSS_INPUT_IS_MEMORY 1
+#define LZSS_INPUT_IS_FILE 2
+#define LZSS_OUTPUT_IS_MEMORY 4
+#define LZSS_OUTPUT_IS_FILE 8
+#define LZSS_PREDICT_SIZE 16
+
 int bit_buffer = 0, bit_mask = 128;
-unsigned long codecount = 0, textcount = 0;
 unsigned char buffer[N * 2];
-FILE *infile, *outfile;
+unsigned long codecount = 0;
 
 static void error(void) {
     printf("Output error\n");  exit(1);
@@ -67,8 +72,21 @@ static void output2(int x, int y, FILE * outfile) {
 	}
 }
 
-void lzss_encode(FILE * infile, FILE * outfile) {
+unsigned long lzss_encode(FILE * infile, FILE * outfile, unsigned char mode) {
     int i, j, f1, x, y, r, s, bufferend, c;
+    unsigned long textcount = 0;
+    if(mode & (LZSS_OUTPUT_IS_FILE | LZSS_OUTPUT_IS_MEMORY)) {
+		fputs("lzss_encode cannot output to both memory and a file\n",stderr);
+		return 0;
+	}
+	if(mode & (LZSS_INPUT_IS_FILE | LZSS_INPUT_IS_MEMORY)) {
+		fputs("lzss_encode cannot take input from both memory and a file\n",stderr);
+		return 0;
+	}
+	if(mode & LZSS_PREDICT_SIZE & (LZSS_OUTPUT_IS_FILE | LZSS_OUTPUT_IS_MEMORY)) {
+		fputs("lzss_encode can only predict output size if there is no output\n",stderr);
+		return 0;
+	}
 
     for (i = 0; i < N - F; i++) buffer[i] = ' ';
     for (i = N - F; i < N * 2; i++) {
@@ -99,10 +117,7 @@ void lzss_encode(FILE * infile, FILE * outfile) {
             }
         }
     }
-    flush_bit_buffer(outfile);
-    printf("text:  %ld bytes\n", textcount);
-    printf("code:  %ld bytes (%ld%%)\n",
-        codecount, (codecount * 100) / textcount);
+    return codecount;
 }
 
 static int getbit(int n, FILE * infile) /* get n bits */
@@ -123,50 +138,37 @@ static int getbit(int n, FILE * infile) /* get n bits */
     return x;
 }
 
-void lzss_decode(FILE * infile, FILE * outfile) {
+unsigned long lzss_decode(FILE * infile, void * outfile, unsigned char mode) {
 	int i, j, k, r, c;
-
+	unsigned long textcount = 0;
+	if(mode & (LZSS_OUTPUT_IS_FILE | LZSS_OUTPUT_IS_MEMORY)) {
+		fputs("lzss_decode cannot output to both memory and a file\n",stderr);
+		return textcount;
+	}
+	if(mode & (LZSS_INPUT_IS_FILE | LZSS_INPUT_IS_MEMORY)) {
+		fputs("lzss_decode cannot take input from both memory and a file\n",stderr);
+		return textcount;
+	}
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
 	r = N - F;
 	while ((c = getbit(1,infile)) != EOF) {
 		if (c) {
 			if ((c = getbit(8,infile)) == EOF) break;
-			fputc(c, outfile);
+			if(mode & LZSS_COUNT_SIZE) textcount++;
+			if(mode & LZSS_OUTPUT_IS_FILE) fputc(c,(FILE)outfile);
+/*			if(mode & LZSS_OUTPUT_IS_MEMORY) ... */
 			buffer[r++] = c;  r &= (N - 1);
 		} else {
 			if ((i = getbit(EI,infile)) == EOF) break;
 			if ((j = getbit(EJ,infile)) == EOF) break;
 			for (k = 0; k <= j + 1; k++) {
 				c = buffer[(i + k) & (N - 1)];
-				fputc(c, outfile);
+				if(mode & LZSS_PREDICT_SIZE) textcount++;
+				if(mode & LZSS_OUTPUT_IS_FILE) fputc(c,(FILE)outfile);
+/*				if(mode & LZSS_OUTPUT_IS_MEMORY) ... */
 				buffer[r++] = c;  r &= (N - 1);
 			}
 		}
 	}
-}
-
-int main(int argc, char *argv[]) {
-	int enc;
-	char *s;
-
-	if (argc != 4) {
-		printf("Usage: lzss e/d infile outfile\n\te = encode\td = decode\n");
-		return 1;
-	}
-	s = argv[1];
-	if (s[1] == 0 && (*s == 'd' || *s == 'D' || *s == 'e' || *s == 'E'))
-		enc = (*s == 'e' || *s == 'E');
-	else {
-		printf("? %s\n", s);
-	return 1;
-	}
-	if ((infile  = fopen(argv[2], "rb")) == NULL) {
-		printf("? %s\n", argv[2]);  return 1;
-	}
-	if ((outfile = fopen(argv[3], "wb")) == NULL) {
-		printf("? %s\n", argv[3]);  return 1;
-	}
-	if (enc) lzss_encode(infile,outfile);  else lzss_decode(infile,outfile);
-	fclose(infile);  fclose(outfile);
-	return 0;
+	return textcount;
 }
