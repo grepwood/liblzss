@@ -4,6 +4,12 @@
 #define LZSS_OUTPUT_IS_FILE 8
 #define LZSS_PREDICT_SIZE 16
 
+#define EI 11  /* typically 10..13 */
+#define EJ  4  /* typically 4..5 */
+#define P   1  /* If match length <= P then output one character */
+#define N (1 << EI)  /* buffer size */
+#define F ((1 << EJ) + P)  /* lookahead buffer size */
+
 #if !defined(_FILE_OFFSET_BITS)
 #	define _FILE_OFFSET_BITS 64
 #endif
@@ -13,13 +19,13 @@
 #	define _FILE_OFFSET_BITS 64
 #endif
 
+#include <stdint.h>
+
 struct lzss_t {
 	char * ptr;
 	size_t size;
 	size_t offset;
 };
-
-#include <stdint.h>
 
 char lzss_decode_ff(FILE * infile, FILE * outfile);
 void lzss_decode_fm(FILE * infile, struct lzss_t * result);

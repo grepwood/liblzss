@@ -5,12 +5,6 @@
 #include <stdint.h>
 #include <lzss.h>
 
-#define EI 11  /* typically 10..13 */
-#define EJ  4  /* typically 4..5 */
-#define P   1  /* If match length <= P then output one character */
-#define N (1 << EI)  /* buffer size */
-#define F ((1 << EJ) + P)  /* lookahead buffer size */
-
 int bit_buffer = 0, bit_mask = 128;
 unsigned char buffer[N * 2];
 unsigned long codecount = 0;
@@ -36,18 +30,20 @@ static int getbitf(int n, FILE * infile) {
 }
 
 static int getbitm(int n, struct lzss_t * input) {
-	int i, x, mask;
-	static int buf;
-	for (i = 0, x = 0, mask = 0; i < n; ++i) {
-		if(input->size <= input->offset) return EOF;
+	int i, x;
+	static int buf, mask = 0;
+	for (i = 0, x = 0; i < n; i++) {
 		if (!mask) {
+			if(input->size <= input->offset) {
+				buf = EOF;
+				return EOF;
+			}
 			mask = 128;
 			buf = input->ptr[input->offset];
-			buf &= 0x000000ff;
 			++input->offset;
 		}
 		x <<= 1;
-		if (buf & mask) ++x;
+		if (buf & mask) x++;
 		mask >>= 1;
 	}
 	return x;
@@ -81,7 +77,7 @@ static void putbit0m(char * outm) {
 	}
 }
 
-static void flush_bit_bufferf(FILE * outfile) {
+/*static void flush_bit_bufferf(FILE * outfile) {
 	if (bit_mask != 128) {
 		if (fputc(bit_buffer, outfile) == EOF) error();
 		codecount++;
@@ -91,9 +87,9 @@ static void flush_bit_bufferf(FILE * outfile) {
 static void flush_bit_bufferm(char * outm) {
 	if(bit_mask != 128) {
 		*outm = (char)bit_buffer;
-		codecount++;
+		++codecount;
 	}
-}
+}*/
 
 static void output1f(int c, FILE * outfile) {
 	int mask;
@@ -222,19 +218,16 @@ static void decode_fm(FILE * infile, char * decomp) {
 
 void lzss_decode_mf(struct lzss_t * input, FILE * outfile) {
 	int i, j, k, r, c;
-	uint64_t Dsize = lzss_predict_decomp_size_m(input);
-	uint64_t progress = 0;
-	printf("Will decompress into %i bytes\n",Dsize);
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
 	r = N - F;
-	while((c = getbitm(1,input)) != EOF) {
+	while ((c = getbitm(1,input)) != EOF) {
 		if (c) {
-			if((c = getbitm(8,input)) == EOF) break;
+			if ((c = getbitm(8,input)) == EOF) break;
 			fputc(c, outfile);
 			buffer[r++] = c;  r &= (N - 1);
 		} else {
-			if((i = getbitm(EI,input)) == EOF) break;
-			if((j = getbitm(EJ,input)) == EOF) break;
+			if ((i = getbitm(EI,input)) == EOF) break;
+			if ((j = getbitm(EJ,input)) == EOF) break;
 			for (k = 0; k <= j + 1; k++) {
 				c = buffer[(i + k) & (N - 1)];
 				fputc(c, outfile);
