@@ -237,38 +237,27 @@ void lzss_decode_mf(struct lzss_t * input, FILE * outfile) {
 	}
 }
 
-void lzss_decode_mm(struct lzss_t * input, struct lzss_t * output) {
-	int i, j, f1, x, y, r, s, bufferend, c;
-	size_t counterD = 0;
-	size_t counterI = 0;
-	output->size = lzss_predict_decomp_size_m(input);
-	output->ptr = (char*)malloc(output->size);
-	if(output->ptr == NULL) {
-		fputs("lzss_decode_mm couldn't allocate memory\n",stderr);
-		return;
-	}
+
+
+static void decode_mm(struct lzss_t * input, struct lzss_t * output) {
+	int i, j, k, r, c;
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
-	for (i = N - F; i < N * 2; i++, ++counterI) buffer[i] = input->ptr[counterI];
-	bufferend = i;  r = N - F;  s = 0;
-	while (r < bufferend) {
-		f1 = (F <= bufferend - r) ? F : bufferend - r;
-		x = 0;  y = 1;  c = buffer[r];
-		for (i = r - 1; i >= s; i--)
-			if (buffer[i] == c) {
-				for (j = 1; j < f1; j++)
-					if (buffer[i + j] != buffer[r + j]) break;
-				if (j > y) {
-					x = i;  y = j;
-				}
+	r = N - F;
+	while ((c = getbitm(1,input)) != EOF) {
+		if (c) {
+			if ((c = getbitm(8,input)) == EOF) break;
+			output->ptr[output->offset] = c;
+			++output->offset;
+			buffer[r++] = c;  r &= (N - 1);
+		} else {
+			if ((i = getbitm(EI,input)) == EOF) break;
+			if ((j = getbitm(EJ,input)) == EOF) break;
+			for (k = 0; k <= j + 1; k++) {
+				c = buffer[(i + k) & (N - 1)];
+				output->ptr[output->offset] = c;
+				++output->offset;
+				buffer[r++] = c;  r &= (N - 1);
 			}
-		if (y <= P) output1m(c,output->ptr+counterD);
-		else output2m(x & (N - 1), y - 2,output->ptr+counterD);
-		++counterD;
-		r += y;  s += y;
-		if (r >= N * 2 - F) {
-			for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
-			bufferend -= N;  r -= N;  s -= N;
-			while (bufferend < N * 2) buffer[bufferend++] = output->ptr[counterD];
 		}
 	}
 }
@@ -295,6 +284,12 @@ char lzss_decode_ff(FILE * infile, FILE * outfile) {
 	return 1;
 }
 
+void lzss_decode_mm(struct lzss_t * input, struct lzss_t * output) {
+	output->size = lzss_predict_decomp_size_m(input);
+	if(output->size) output->ptr = malloc(output->size);
+	else output->ptr = NULL;
+	if (output->ptr != NULL) decode_mm(input,output);
+}
 
 void lzss_decode_fm(FILE * infile, struct lzss_t * result) {
 	result->size = lzss_predict_decomp_size_f(infile);
