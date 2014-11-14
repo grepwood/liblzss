@@ -27,12 +27,15 @@ struct lzss_t {
 	size_t offset;
 };
 
-char lzss_decode_ff(FILE * infile, FILE * outfile);
+void lzss_decode_ff(FILE * infile, FILE * outfile);
 void lzss_decode_fm(FILE * infile, struct lzss_t * result);
 void lzss_decode_mf(struct lzss_t * input, FILE * outfile);
 void lzss_decode_mm(struct lzss_t * input, struct lzss_t * result);
 
-char lzss_encode_ff(FILE * infile, FILE * outfile);
+void lzss_encode_ff(FILE * infile, FILE * outfile);
+void lzss_encode_fm(FILE * infile, struct lzss_t * result);
+void lzss_encode_mf(struct lzss_t * input, FILE * outfile);
+void lzss_encode_mm(struct lzss_t * input, struct lzss_t * result);
 
 uint64_t lzss_predict_decomp_size_f(FILE * infile);
 uint64_t lzss_predict_decomp_size_m(struct lzss_t * input);
