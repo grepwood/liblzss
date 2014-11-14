@@ -5,10 +5,9 @@
 int main(int argc, char * argv[]) {
 	FILE * infile;
 	FILE * oufile;
-	struct lzss_t output;
 	struct lzss_t input;
 
-	if(argc != 3) exit(0);
+	if( argc != 3) exit(-1);
 
 	infile = fopen(argv[1],"rb");
 	fseek(infile,0,SEEK_END);
@@ -17,12 +16,11 @@ int main(int argc, char * argv[]) {
 	fseek(infile,0,SEEK_SET);
 	fread(input.ptr,input.size,1,infile);
 	fclose(infile);
+	printf("Buffered %lu bytes for decompression\n",input.size);
 
-	lzss_decode_mm(&input,&output);
-	free(input.ptr);
 	oufile = fopen(argv[2],"wb");
-	fwrite(output.ptr,output.size,1,oufile);
+	lzss_encode_mf(&input,oufile);
 	fclose(oufile);
-	free(output.ptr);
+	free(input.ptr);
 	return 0;
 }

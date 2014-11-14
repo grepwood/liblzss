@@ -10,7 +10,7 @@ unsigned char buffer[N * 2];
 unsigned long codecount = 0;
 
 static void error(void) {
-    printf("Output error\n");  exit(1);
+	puts("Output error");  exit(1);
 }
 
 /* get n bits */
@@ -57,10 +57,13 @@ static void putbit1f(FILE * outfile) {
 	}
 }
 
-static void putbit1m(char * outm) {
+static void putbit1m(struct lzss_t * output) {
 	bit_buffer |= bit_mask;
 	if ((bit_mask >>= 1) == 0) {
-		*outm = (char)bit_buffer; bit_buffer = 0; bit_mask = 128; codecount++;
+		if(output->size > output->offset) {
+			output->ptr[output->offset] = bit_buffer;
+			bit_buffer = 0; bit_mask = 128; output->offset++;
+		} else error();
 	}
 }
 
@@ -71,44 +74,53 @@ static void putbit0f(FILE * outfile) {
 	}
 }
 
-static void putbit0m(char * outm) {
-	if (!(bit_mask >>= 1)) {
-		*outm = (char)bit_buffer; bit_buffer = 0; bit_mask = 128; codecount++;
+static void putbit0m(struct lzss_t * output) {
+	if ((bit_mask >>= 1) == 0) {
+		if(output->size > output->offset) {
+			output->ptr[output->offset] = bit_buffer;
+			bit_buffer = 0; bit_mask = 128; output->offset++;
+		}
 	}
 }
 
-/*static void flush_bit_bufferf(FILE * outfile) {
+static void flush_bit_bufferf(FILE * outfile) {
 	if (bit_mask != 128) {
 		if (fputc(bit_buffer, outfile) == EOF) error();
-		codecount++;
 	}
 }
 
-static void flush_bit_bufferm(char * outm) {
-	if(bit_mask != 128) {
-		*outm = (char)bit_buffer;
-		++codecount;
+static char blind_flush_bit_buffer(void) {
+	char result = 0;
+	if (bit_mask != 128) {
+		result = 1;
+		bit_mask = 128;
 	}
-}*/
+	bit_buffer = 0;
+	return result;
+}
+
+static void flush_bit_bufferm(struct lzss_t * output) {
+	if(bit_mask != 128) {
+		output->ptr[output->offset] = bit_buffer;
+		++output->offset;
+	}
+}
 
 static void output1f(int c, FILE * outfile) {
-	int mask;
-
+	int mask = 256;
 	putbit1f(outfile);
-	mask = 256;
 	while (mask >>= 1) {
 		if (c & mask) putbit1f(outfile);
 		else putbit0f(outfile);
 	}
 }
 
-static void output1m(int c, char * outm) {
-	int mask;
-	putbit1m(outm);
-	mask = 256;
+static void output1m(int c, struct lzss_t * output) {
+	int mask = 256;
+	putbit1m(output);
 	while(mask >>= 1) {
-		if(c & mask) putbit1m(outm);
-		else putbit0m(outm);
+		if(c & mask) putbit1m(output);
+		else putbit0m(output);
 	}
 }
 
@@ -127,18 +139,18 @@ static void output2f(int x, int y, FILE * outfile) {
 	}
 }
 
-static void output2m(int x, int y, char * outm) {
+static void output2m(int x, int y, struct lzss_t * output) {
 	int mask = N;
 
-	putbit0m(outm);
+	putbit0m(output);
 	while(mask >>= 1) {
-		if (x & mask) putbit1m(outm);
-		else putbit0m(outm);
+		if (x & mask) putbit1m(output);
+		else putbit0m(output);
 	}
 	mask = (1 < EJ);
 	while(mask >>= 1) {
-		if (y & mask) putbit1m(outm);
-		else putbit0m(outm);
+		if (y & mask) putbit1m(output);
+		else putbit0m(output);
 	}
 }
 
@@ -192,24 +204,23 @@ uint64_t lzss_predict_decomp_size_m(struct lzss_t * input) {
 	return Dsize;
 }
 
-static void decode_fm(FILE * infile, char * decomp) {
+static void decode_fm(FILE * infile, struct lzss_t * output) {
 	int i, j, k, r, c;
-	size_t displacement = 0;
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
 	r = N - F;
 	while ((c = getbitf(1,infile)) != EOF) {
 		if (c) {
 			if ((c = getbitf(8,infile)) == EOF) break;
-			decomp[displacement] = (char)c;
-			++displacement;
+			output->ptr[output->offset] = c;
+			++output->offset;
 			buffer[r++] = c;  r &= (N - 1);
 		} else {
 			if ((i = getbitf(EI,infile)) == EOF) break;
 			if ((j = getbitf(EJ,infile)) == EOF) break;
 			for (k = 0; k <= j + 1; k++) {
 				c = buffer[(i + k) & (N - 1)];
-				decomp[displacement] = (char)c;
-				++displacement;
+				output->ptr[output->offset] = c;
+				++output->offset;
 				buffer[r++] = c;  r &= (N - 1);
 			}
 		}
@@ -218,6 +229,7 @@ static void decode_fm(FILE * infile, char * decomp) {
 
 void lzss_decode_mf(struct lzss_t * input, FILE * outfile) {
 	int i, j, k, r, c;
+	input->offset = 0;
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
 	r = N - F;
 	while ((c = getbitm(1,input)) != EOF) {
@@ -262,7 +274,7 @@ static void decode_mm(struct lzss_t * input, struct lzss_t * output) {
 	}
 }
 
-char lzss_decode_ff(FILE * infile, FILE * outfile) {
+void lzss_decode_ff(FILE * infile, FILE * outfile) {
 	int i, j, k, r, c;
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
 	r = N - F;
@@ -281,24 +293,26 @@ char lzss_decode_ff(FILE * infile, FILE * outfile) {
 			}
 		}
 	}
-	return 1;
 }
 
 void lzss_decode_mm(struct lzss_t * input, struct lzss_t * output) {
+	input->offset = 0;
 	output->size = lzss_predict_decomp_size_m(input);
-	if(output->size) output->ptr = malloc(output->size);
+	output->offset = 0;
+	if(output->size) output->ptr = (char*)malloc(output->size);
 	else output->ptr = NULL;
 	if (output->ptr != NULL) decode_mm(input,output);
 }
 
 void lzss_decode_fm(FILE * infile, struct lzss_t * result) {
 	result->size = lzss_predict_decomp_size_f(infile);
-	if(result->size) result->ptr = malloc(result->size);
+	result->offset = 0;
+	if(result->size) result->ptr = (char*)malloc(result->size);
 	else result->ptr = NULL;
-	if(result->ptr != NULL) decode_fm(infile,result->ptr);
+	if(result->ptr != NULL) decode_fm(infile,result);
 }
 
-char lzss_encode_ff(FILE * infile, FILE * outfile) {
+void lzss_encode_ff(FILE * infile, FILE * outfile) {
 	int i, j, f1, x, y, r, s, bufferend, c;
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
 	for (i = N - F; i < N * 2; i++) {
@@ -329,5 +343,244 @@ char lzss_encode_ff(FILE * infile, FILE * outfile) {
 			}
 		}
 	}
-	return 1;
+	flush_bit_bufferf(outfile);
+}
+
+void lzss_encode_mf(struct  lzss_t * input, FILE * outfile) {
+	int i, j, f1, x, y, r, s, bufferend, c;
+	input->offset = 0;
+	for (i = 0; i < N - F; i++) buffer[i] = ' ';
+	for (i = N - F; i < N * 2; i++) {
+		if(input->size <= input->offset) break;
+		buffer[i] = c = input->ptr[input->offset++];
+	}
+	bufferend = i;  r = N - F;  s = 0;
+	while (r < bufferend) {
+		f1 = (F <= bufferend - r) ? F : bufferend - r;
+		x = 0;  y = 1;  c = buffer[r];
+		for (i = r - 1; i >= s; i--)
+			if (buffer[i] == c) {
+				for (j = 1; j < f1; j++)
+					if (buffer[i + j] != buffer[r + j]) break;
+				if (j > y) {
+					x = i;  y = j;
+				}
+			}
+		if (y <= P) output1f(c,outfile);
+		else output2f(x & (N - 1), y - 2,outfile);
+		r += y;  s += y;
+		if (r >= N * 2 - F) {
+			for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
+			bufferend -= N;  r -= N;  s -= N;
+			while (bufferend < N * 2) {
+				if(input->size <= input->offset) break;
+				c = input->ptr[input->offset++];
+				buffer[bufferend++] = c;
+			}
+		}
+	}
+	flush_bit_bufferf(outfile);
+}
+
+static size_t blind_putbit1(void) {
+	size_t result = 0;
+	bit_buffer |= bit_mask;
+	if ((bit_mask >>= 1) == 0) {
+		bit_buffer = 0;  bit_mask = 128; result++;
+	}
+	return result;
+}
+
+static size_t blind_putbit0() {
+	size_t result = 0;
+	if ((bit_mask >>= 1) == 0) {
+		bit_buffer = 0;  bit_mask = 128;  result++;
+	}
+	return result;
+}
+
+static size_t blind_output2(int x, int y) {
+	int mask = N;
+	size_t result = 0;
+
+	result += blind_putbit0();
+	while (mask >>= 1) {
+		if (x & mask) result += blind_putbit1();
+		else result += blind_putbit0();
+	}
+	mask = (1 << EJ);
+	while (mask >>= 1) {
+		if (y & mask) result += blind_putbit1();
+		else result += blind_putbit0();
+	}
+	return result;
+}
+
+static size_t blind_output1(int c) {
+	int mask = 256;
+	size_t result = 0;
+	result += blind_putbit1();
+	while (mask >>= 1) {
+		if (c & mask) result += blind_putbit1();
+		else result += blind_putbit0();
+	}
+	return result;
+}
+
+uint64_t lzss_predict_comp_size_f(FILE * infile) {
+	int i, j, f1, x, y, r, s, bufferend, c;
+	uint64_t size = 0;
+	for (i = 0; i < N - F; i++) buffer[i] = ' ';
+	for (i = N - F; i < N * 2; i++) {
+		if ((c = fgetc(infile)) == EOF) break;
+		buffer[i] = c;
+	}
+	bufferend = i;  r = N - F;  s = 0;
+	while (r < bufferend) {
+		f1 = (F <= bufferend - r) ? F : bufferend - r;
+		x = 0;  y = 1;  c = buffer[r];
+		for (i = r - 1; i >= s; i--)
+			if (buffer[i] == c) {
+				for (j = 1; j < f1; j++)
+					if (buffer[i + j] != buffer[r + j]) break;
+				if (j > y) {
+					x = i;  y = j;
+				}
+			}
+		if (y <= P) size += blind_output1(c);
+		else size += blind_output2(x & (N - 1), y - 2);
+		r += y;  s += y;
+		if (r >= N * 2 - F) {
+			for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
+			bufferend -= N;  r -= N;  s -= N;
+			while (bufferend < N * 2) {
+				if ((c = fgetc(infile)) == EOF) break;
+				buffer[bufferend++] = c;
+			}
+		}
+	}
+	size += blind_flush_bit_buffer();
+	fseeko(infile,0,SEEK_SET);
+	if(sizeof(size_t) < 8 && size > 0xFFFFFFFF) fputs("lzss_predict_comp_size_f: comp larger than 4GiB\n",stderr);
+	return size;
+}
+
+uint64_t lzss_predict_comp_size_m(struct lzss_t * input) {
+	int i, j, f1, x, y, r, s, bufferend, c;
+	uint64_t size = 0;
+	for (i = 0; i < N - F; i++) buffer[i] = ' ';
+	for (i = N - F; i < N * 2; i++, input->offset++) {
+		if(input->size <= input->offset) break;
+		buffer[i] = c = input->ptr[input->offset];
+	}
+	bufferend = i;  r = N - F;  s = 0;
+	while (r < bufferend) {
+		f1 = (F <= bufferend - r) ? F : bufferend - r;
+		x = 0;  y = 1;  c = buffer[r];
+		for (i = r - 1; i >= s; i--)
+			if (buffer[i] == c) {
+				for (j = 1; j < f1; j++)
+					if (buffer[i + j] != buffer[r + j]) break;
+				if (j > y) {
+					x = i;  y = j;
+				}
+			}
+		if (y <= P) size += blind_output1(c);
+		else size += blind_output2(x & (N - 1), y - 2);
+		r += y;  s += y;
+		if (r >= N * 2 - F) {
+			for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
+			for(bufferend -= N, r -= N, s-= N; bufferend < N*2 || input->size <= input->offset; input->offset++, bufferend++) buffer[bufferend] = c = input->ptr[input->offset];
+		}
+	}
+	size += blind_flush_bit_buffer();
+	input->offset = 0;
+	if(sizeof(size_t) < 8 && size > 0xFFFFFFFF) fputs("lzss_predict_comp_size_m: comp larger than 4GiB\n",stderr);
+	return size;
+}
+
+static void encode_fm(FILE * infile, struct lzss_t * output) {
+	int i, j, f1, x, y, r, s, bufferend, c;
+	for (i = 0; i < N - F; i++) buffer[i] = ' ';
+	for (i = N - F; i < N * 2; i++) {
+		if ((c = fgetc(infile)) == EOF) break;
+		buffer[i] = c;
+	}
+	bufferend = i;  r = N - F;  s = 0;
+	while (r < bufferend) {
+		f1 = (F <= bufferend - r) ? F : bufferend - r;
+		x = 0;  y = 1;  c = buffer[r];
+		for (i = r - 1; i >= s; i--)
+			if (buffer[i] == c) {
+				for (j = 1; j < f1; j++)
+					if (buffer[i + j] != buffer[r + j]) break;
+				if (j > y) {
+					x = i;  y = j;
+				}
+			}
+		if (y <= P) output1m(c,output);
+		else output2m(x & (N - 1), y - 2,output);
+		r += y;  s += y;
+		if (r >= N * 2 - F) {
+			for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
+			bufferend -= N;  r -= N;  s -= N;
+			while (bufferend < N * 2) {
+				if ((c = fgetc(infile)) == EOF) break;
+				buffer[bufferend++] = c;
+			}
+		}
+	}
+	flush_bit_bufferm(output);
+}
+
+static void encode_mm(struct lzss_t * input, struct lzss_t * output) {
+	int i, j, f1, x, y, r, s, bufferend, c;
+	for (i = 0; i < N - F; i++) buffer[i] = ' ';
+	for (i = N - F; i < N * 2; i++) {
+		if(input->size <= input->offset) break;
+		buffer[i] = c = input->ptr[input->offset++];
+	}
+	bufferend = i;  r = N - F;  s = 0;
+	while (r < bufferend) {
+		f1 = (F <= bufferend - r) ? F : bufferend - r;
+		x = 0;  y = 1;  c = buffer[r];
+		for (i = r - 1; i >= s; i--)
+			if (buffer[i] == c) {
+				for (j = 1; j < f1; j++)
+					if (buffer[i + j] != buffer[r + j]) break;
+				if (j > y) {
+					x = i;  y = j;
+				}
+			}
+		if (y <= P) output1m(c,output);
+		else output2m(x & (N - 1), y - 2,output);
+		r += y;  s += y;
+		if (r >= N * 2 - F) {
+			for (i = 0; i < N; i++) buffer[i] = buffer[i + N];
+			bufferend -= N;  r -= N;  s -= N;
+			while (bufferend < N * 2) {
+				if(input->size <= input->offset) break;
+				c = input->ptr[input->offset++];
+				buffer[bufferend++] = c;
+			}
+		}
+	}
+	flush_bit_bufferm(output);
+}
+
+void lzss_encode_mm(struct lzss_t * input, struct lzss_t * output) {
+	input->offset = 0;
+	output->size = lzss_predict_comp_size_m(input);
+	output->offset = 0;
+	if(output->size) output->ptr = (char*)malloc(output->size);
+	else output->ptr = NULL;
+	if(output->ptr != NULL) encode_mm(input,output);
+}
+
+void lzss_encode_fm(FILE * infile, struct lzss_t * output) {
+	output->size = lzss_predict_comp_size_f(infile);
+	output->offset = 0;
+	if(output->size) output->ptr = (char*)malloc(output->size);
+	else output->ptr = NULL;
+	if(output->ptr != NULL) encode_fm(infile,output);
 }

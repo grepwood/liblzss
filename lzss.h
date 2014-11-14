@@ -39,3 +39,5 @@ void lzss_encode_mm(struct lzss_t * input, struct lzss_t * result);
 
 uint64_t lzss_predict_decomp_size_f(FILE * infile);
 uint64_t lzss_predict_decomp_size_m(struct lzss_t * input);
+uint64_t lzss_predict_comp_size_f(FILE * infile);
+uint64_t lzss_predict_comp_size_m(struct lzss_t * input);
