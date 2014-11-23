@@ -32,7 +32,7 @@ void lzss_decode_fm(FILE * infile, struct lzss_t * result);
 void lzss_decode_mf(struct lzss_t * input, FILE * outfile);
 void lzss_decode_mm(struct lzss_t * input, struct lzss_t * result);
 
-void lzss_encode_ff(FILE * infile, FILE * outfile);
+uint64_t lzss_encode_ff(FILE * infile, FILE * outfile);
 void lzss_encode_fm(FILE * infile, struct lzss_t * result);
 void lzss_encode_mf(struct lzss_t * input, FILE * outfile);
 void lzss_encode_mm(struct lzss_t * input, struct lzss_t * result);

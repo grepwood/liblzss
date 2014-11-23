@@ -3,14 +3,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
-#include <lzss.h>
+#include "lzss.h"
 
 int bit_buffer = 0, bit_mask = 128;
 unsigned char buffer[N * 2];
-unsigned long codecount = 0;
 
 static void error(void) {
-	puts("Output error");  exit(1);
+	puts("Output error"); exit(1);
 }
 
 /* get n bits */
@@ -49,12 +48,15 @@ static int getbitm(int n, struct lzss_t * input) {
 	return x;
 }
 
-static void putbit1f(FILE * outfile) {
+/*static char putbit1f(FILE * outfile, int * bit_buffer, int * bit_mask) {
+*/static char putbit1f(FILE * outfile) {
+	char result = 0;
 	bit_buffer |= bit_mask;
 	if ((bit_mask >>= 1) == 0) {
 		if (fputc(bit_buffer, outfile) == EOF) error();
-		bit_buffer = 0;  bit_mask = 128;  codecount++;
+		bit_buffer = 0;  bit_mask = 128;  result++;
 	}
+	return result;
 }
 
 static void putbit1m(struct lzss_t * output) {
@@ -67,11 +69,13 @@ static void putbit1m(struct lzss_t * output) {
 	}
 }
 
-static void putbit0f(FILE * outfile) {
+static char putbit0f(FILE * outfile) {
+	char result = 0;
 	if ((bit_mask >>= 1) == 0) {
 		if (fputc(bit_buffer, outfile) == EOF) error();
-		bit_buffer = 0;  bit_mask = 128;  codecount++;
+		bit_buffer = 0;  bit_mask = 128;  result++;
 	}
+	return result;
 }
 
 static void putbit0m(struct lzss_t * output) {
@@ -83,10 +87,13 @@ static void putbit0m(struct lzss_t * output) {
 	}
 }
 
-static void flush_bit_bufferf(FILE * outfile) {
+static char flush_bit_bufferf(FILE * outfile) {
+	char result = 0;
 	if (bit_mask != 128) {
 		if (fputc(bit_buffer, outfile) == EOF) error();
-	}
+		else result = 1;
+	} else result = 0;
+	return result;
 }
 
 static char blind_flush_bit_buffer(void) {
@@ -106,13 +113,14 @@ static void flush_bit_bufferm(struct lzss_t * output) {
 	}
 }
 
-static void output1f(int c, FILE * outfile) {
+static char output1f(int c, FILE * outfile) {
 	int mask = 256;
-	putbit1f(outfile);
+	char result = putbit1f(outfile);
 	while (mask >>= 1) {
-		if (c & mask) putbit1f(outfile);
-		else putbit0f(outfile);
+		if (c & mask) result += putbit1f(outfile);
+		else result += putbit0f(outfile);
 	}
+	return result;
 }
 
 static void output1m(int c, struct lzss_t * output) {
@@ -124,19 +132,19 @@ static void output1m(int c, struct lzss_t * output) {
 	}
 }
 
-static void output2f(int x, int y, FILE * outfile) {
+static char output2f(int x, int y, FILE * outfile) {
 	int mask = N;
-
-	putbit0f(outfile);
+	char result = putbit0f(outfile);
 	while (mask >>= 1) {
-		if (x & mask) putbit1f(outfile);
-		else putbit0f(outfile);
+		if (x & mask) result += putbit1f(outfile);
+		else result += putbit0f(outfile);
 	}
 	mask = (1 << EJ);
 	while (mask >>= 1) {
-		if (y & mask) putbit1f(outfile);
-		else putbit0f(outfile);
+		if (y & mask) result += putbit1f(outfile);
+		else result += putbit0f(outfile);
 	}
+	return result;
 }
 
 static void output2m(int x, int y, struct lzss_t * output) {
@@ -312,8 +320,9 @@ void lzss_decode_fm(FILE * infile, struct lzss_t * result) {
 	if(result->ptr != NULL) decode_fm(infile,result);
 }
 
-void lzss_encode_ff(FILE * infile, FILE * outfile) {
+uint64_t lzss_encode_ff(FILE * infile, FILE * outfile) {
 	int i, j, f1, x, y, r, s, bufferend, c;
+	uint64_t result = 0;
 	for (i = 0; i < N - F; i++) buffer[i] = ' ';
 	for (i = N - F; i < N * 2; i++) {
 		if ((c = fgetc(infile)) == EOF) break;
@@ -343,7 +352,7 @@ void lzss_encode_ff(FILE * infile, FILE * outfile) {
 			}
 		}
 	}
-	flush_bit_bufferf(outfile);
+	return result+flush_bit_bufferf(outfile);
 }
 
 void lzss_encode_mf(struct  lzss_t * input, FILE * outfile) {
