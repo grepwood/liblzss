@@ -5,6 +5,7 @@
 int main(int argc, char * argv[]) {
 	FILE * infile;
 	FILE * oufile;
+	int err;
 	struct lzss_t output;
 	struct lzss_t input;
 
@@ -15,7 +16,8 @@ int main(int argc, char * argv[]) {
 	input.size = ftell(infile);
 	input.ptr = (char*)malloc(input.size);
 	fseek(infile,0,SEEK_SET);
-	fread(input.ptr,input.size,1,infile);
+	err = fread(input.ptr,input.size,1,infile);
+	if(err != 1) fputs("fread not 1\n",stderr);
 	fclose(infile);
 	lzss_encode_mm(&input,&output);
 
