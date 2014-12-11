@@ -18,7 +18,6 @@ int main(int argc, char * argv[]) {
 	err = fread(input.ptr,input.size,1,infile);
 	if(err != 1) fputs("fread not 1\n",stderr);
 	fclose(infile);
-	printf("Buffered %lu bytes for decompression\n",input.size);
 
 	oufile = fopen(argv[2],"wb");
 	lzss_encode_mf(&input,oufile);
