@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
 	}
 	if(command & STDIN) fi = stdin;
 	if(command & STDOUT) fo = stdout;
-	switch(command & BOTH_WAYS) {
+	switch((command & BOTH_WAYS) % BOTH_WAYS) {
 		case 0:
 			getout(path,fi,fo);
 			break;
@@ -84,9 +84,6 @@ int main(int argc, char **argv) {
 			break;
 		case DECODE:
 			lzss_decode_ff(fi,fo);
-			break;
-		case BOTH_WAYS:
-			getout(path,fi,fo);
 			break;
 	}
 	fclose(fi);
