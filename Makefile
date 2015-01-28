@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-O2
+CFLAGS=-O2 -g3
 WFLAGS=-Wall -Wextra -pedantic 
 LFLAGS=-shared -fPIC
 PREFIX=/usr/local
