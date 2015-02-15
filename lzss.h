@@ -1,47 +1,30 @@
-#define LZSS_INPUT_IS_MEMORY 1
-#define LZSS_INPUT_IS_FILE 2
-#define LZSS_OUTPUT_IS_MEMORY 4
-#define LZSS_OUTPUT_IS_FILE 8
-#define LZSS_PREDICT_SIZE 16
-
-#define DEFAULT_EI 11  /* typically 10..13 */
-#define DEFAULT_EJ  4  /* typically 4..5 */
-#define DEFAULT_P   1  /* If match length <= P then output one character */
-
-#if !defined(_FILE_OFFSET_BITS)
-#	define _FILE_OFFSET_BITS 64
-#endif
-
-#if (defined(_FILE_OFFSET_BITS) && _FILE_OFFSET_BITS != 64)
-#	undefine _FILE_OFFSET_BITS
-#	define _FILE_OFFSET_BITS 64
-#endif
-
 #include <stdint.h>
 
-struct lzss_settings {
-	uint8_t EI;
-	uint8_t EJ;
-	uint8_t P;
+struct lzss_prm {
+	int32_t c_nRingBufferSize;
+	int32_t c_nMatchLengthUpperLimit;
+	int32_t c_nThreshold;
 };
 
-struct lzss_t {
+struct lzss_pld {
+	char operation;
+	struct lzss_prm * options;
+};
+
+struct lzss_obj {
 	char * ptr;
 	size_t size;
-	size_t offset;
+	size_t off;
 };
 
-void lzss_decode_ff(FILE * infile, FILE * outfile, struct lzss_settings * settings);
-void lzss_decode_fm(FILE * infile, struct lzss_t * result, struct lzss_settings * settings);
-void lzss_decode_mf(struct lzss_t * input, FILE * outfile, struct lzss_settings * settings);
-void lzss_decode_mm(struct lzss_t * input, struct lzss_t * result, struct lzss_settings * settings);
+#define INPUT_MEMORY 1
+#define OUTPUT_MEMORY 2
+#define NO_PREDICT 4
+#define DECOMPRESS 8
+#define DEFAULT_PARAMS 16
 
-uint64_t lzss_encode_ff(FILE * infile, FILE * outfile, struct lzss_settings * settings);
-void lzss_encode_fm(FILE * infile, struct lzss_t * result, struct lzss_settings * settings);
-void lzss_encode_mf(struct lzss_t * input, FILE * outfile, struct lzss_settings * settings);
-void lzss_encode_mm(struct lzss_t * input, struct lzss_t * result, struct lzss_settings * settings);
+uint64_t LZSS_Decode_Buffer_Predict(struct lzss_obj * in, struct lzss_pld * payload);
+void LZSS_Decode_Buffer(struct lzss_obj	* in, void * out, struct lzss_pld * payload);
+void LZSS_Decode_Stream(FILE * in, void * out, struct lzss_pld * payload);
 
-uint64_t lzss_predict_decomp_size_f(FILE * infile);
-uint64_t lzss_predict_decomp_size_m(struct lzss_t * input);
-uint64_t lzss_predict_comp_size_f(FILE * infile);
-uint64_t lzss_predict_comp_size_m(struct lzss_t * input);
+void LZSS_Encode_Stream(void * in, void * out, void * payload);
